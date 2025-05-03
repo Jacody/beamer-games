@@ -20,8 +20,16 @@ DEFAULT_P2_COLOR = (0, 0, 255) # Blau
 BALL_COLOR = (255, 255, 255)
 TRIBUNE_COLOR = (60, 60, 60)
 
-PLAYER_RADIUS = 15
-BALL_RADIUS = 10
+# --- Einstellbare Parameter ---
+DEFAULT_PLAYER_RADIUS = 15
+DEFAULT_BALL_RADIUS = 10
+MIN_RADIUS = 5
+MAX_PLAYER_RADIUS = 25
+MAX_BALL_RADIUS = 20
+# ----------------------------
+
+PLAYER_RADIUS = DEFAULT_PLAYER_RADIUS
+BALL_RADIUS = DEFAULT_BALL_RADIUS
 PLAYER_ROTATION_SPEED = 180
 PLAYER_SPRINT_SPEED = 250
 BALL_FRICTION = 0.5
@@ -49,6 +57,7 @@ BALL_TRAIL_LENGTH = 12
 BALL_TRAIL_MIN_SPEED = 150 # Nur Spur zeichnen, wenn Ball schnell genug ist
 
 # --- SPIELZUSTÄNDE ---
+STATE_SETTINGS = "SETTINGS"
 STATE_AVATAR_SELECT = "AVATAR_SELECT"
 STATE_MENU = "MENU"
 STATE_PLAYING = "PLAYING"
@@ -150,6 +159,11 @@ class Player(pygame.sprite.Sprite):
         self.sprint_speed = PLAYER_SPRINT_SPEED
         self.sprint_particle_timer = 0 # Timer für Partikelemission
 
+    def update_radius(self, new_radius):
+        self.radius = new_radius
+        if hasattr(self, 'color'):
+            self.set_avatar(self.color)
+
     def set_avatar(self, color):
         self.color = color
         self.original_image = pygame.Surface((self.radius * 2, self.radius * 2), pygame.SRCALPHA)
@@ -208,15 +222,24 @@ class Player(pygame.sprite.Sprite):
 class Ball(pygame.sprite.Sprite):
     def __init__(self, x, y):
         super().__init__()
-        self.original_image = pygame.Surface((BALL_RADIUS * 2, BALL_RADIUS * 2), pygame.SRCALPHA)
-        pygame.draw.circle(self.original_image, BALL_COLOR, (BALL_RADIUS, BALL_RADIUS), BALL_RADIUS)
-        self.image = self.original_image
-        self.rect = self.image.get_rect(center=(x, y))
+        self.radius = BALL_RADIUS
+        self.update_appearance()
         self.pos = pygame.Vector2(x, y)
+        if self.rect: self.rect.center = self.pos
         self.velocity = pygame.Vector2(0, 0)
         self.friction_factor = BALL_FRICTION
-        self.radius = BALL_RADIUS
         self.trail_positions = [] # Für Ballspur
+
+    def update_radius(self, new_radius):
+        self.radius = new_radius
+        self.update_appearance()
+
+    def update_appearance(self):
+        self.original_image = pygame.Surface((self.radius * 2, self.radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(self.original_image, BALL_COLOR, (self.radius, self.radius), self.radius)
+        self.image = self.original_image
+        self.rect = self.image.get_rect()
+        if hasattr(self, 'pos') and self.pos: self.rect.center = self.pos
 
     def apply_friction(self, dt):
         self.velocity *= (self.friction_factor ** dt)
@@ -296,11 +319,16 @@ players = pygame.sprite.Group(player1, player2)
 
 # --- Spielzustand Variablen ---
 score1 = 0; score2 = 0
-game_state = STATE_AVATAR_SELECT
+game_state = STATE_SETTINGS
 start_time = 0; remaining_time = GAME_DURATION; last_goal_time = 0
 
 # --- Avatar Auswahl Variablen ---
 selecting_player = 1; p1_avatar_index = -1; p2_avatar_index = -1; current_highlighted_index = 0
+
+# --- Einstellungen Variablen ---
+settings_option = 0  # 0 = Spieler-Größe, 1 = Ball-Größe
+current_player_radius = DEFAULT_PLAYER_RADIUS
+current_ball_radius = DEFAULT_BALL_RADIUS
 
 # --- Hilfsfunktionen ---
 def draw_tribunes_and_spectators():
@@ -344,6 +372,12 @@ def reset_positions():
     p2_color = AVATAR_COLORS[p2_avatar_index] if p2_avatar_index != -1 else DEFAULT_P2_COLOR
     player1_start_x = SCREEN_WIDTH * 0.25; player2_start_x = SCREEN_WIDTH * 0.75
     field_center_y = TRIBUNE_HEIGHT + (SCREEN_HEIGHT - 2 * TRIBUNE_HEIGHT) / 2
+    
+    # Spieler- und Ballgrößen aktualisieren
+    player1.update_radius(PLAYER_RADIUS)
+    player2.update_radius(PLAYER_RADIUS)
+    ball.update_radius(BALL_RADIUS)
+    
     player1.reset(player1_start_x, field_center_y, 0, p1_color)
     player2.reset(player2_start_x, field_center_y, 180, p2_color)
     ball.reset()
@@ -373,6 +407,39 @@ def draw_ball_trail(surface, trail, ball_radius):
                 surface.blit(temp_surf, pos - pygame.Vector2(radius, radius))
             except (ValueError, TypeError): pass
 
+def draw_settings_screen():
+    screen.fill(TRIBUNE_COLOR)
+    draw_text("Spieleinstellungen", menu_font, SCREEN_WIDTH / 2, 100)
+    
+    # Spieler-Größe
+    option_color = HIGHLIGHT_COLOR if settings_option == 0 else TEXT_COLOR
+    draw_text(f"Spieler-Größe: {current_player_radius}", main_font, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 60, option_color)
+    
+    # Ball-Größe
+    option_color = HIGHLIGHT_COLOR if settings_option == 1 else TEXT_COLOR
+    draw_text(f"Ball-Größe: {current_ball_radius}", main_font, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, option_color)
+    
+    # Vorschau
+    pygame.draw.circle(screen, DEFAULT_P1_COLOR, (SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT / 2 + 80), current_player_radius)
+    pygame.draw.circle(screen, BALL_COLOR, (SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 80), current_ball_radius)
+    pygame.draw.circle(screen, DEFAULT_P2_COLOR, (SCREEN_WIDTH / 2 + 100, SCREEN_HEIGHT / 2 + 80), current_player_radius)
+    
+    draw_text("Pfeiltasten ↑/↓: Option wählen, ←/→: Wert ändern", small_font, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 150)
+    draw_text("Enter oder Space: Bestätigen", small_font, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 100)
+    draw_text("ESC: Beenden", small_font, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 50)
+
+def apply_settings():
+    global PLAYER_RADIUS, BALL_RADIUS, AVATAR_DISPLAY_SIZE, AVATAR_SPACING
+    PLAYER_RADIUS = current_player_radius
+    BALL_RADIUS = current_ball_radius
+    AVATAR_DISPLAY_SIZE = PLAYER_RADIUS * 3
+    AVATAR_SPACING = AVATAR_DISPLAY_SIZE + 20
+    
+    # Spieler und Ball Größen aktualisieren
+    player1.update_radius(PLAYER_RADIUS)
+    player2.update_radius(PLAYER_RADIUS)
+    ball.update_radius(BALL_RADIUS)
+
 # --- Haupt Game Loop ---
 running = True
 while running:
@@ -388,7 +455,27 @@ while running:
                 reset_avatar_selection(); game_state = STATE_AVATAR_SELECT
                 pygame.display.set_caption("Simple Soccer Game - Select Avatar")
 
-            if game_state == STATE_AVATAR_SELECT:
+            if game_state == STATE_SETTINGS:
+                if event.key == pygame.K_UP:
+                    settings_option = (settings_option - 1) % 2
+                elif event.key == pygame.K_DOWN:
+                    settings_option = (settings_option + 1) % 2
+                elif event.key == pygame.K_LEFT:
+                    if settings_option == 0:  # Spieler-Größe
+                        current_player_radius = max(MIN_RADIUS, current_player_radius - 1)
+                    elif settings_option == 1:  # Ball-Größe
+                        current_ball_radius = max(MIN_RADIUS, current_ball_radius - 1)
+                elif event.key == pygame.K_RIGHT:
+                    if settings_option == 0:  # Spieler-Größe
+                        current_player_radius = min(MAX_PLAYER_RADIUS, current_player_radius + 1)
+                    elif settings_option == 1:  # Ball-Größe
+                        current_ball_radius = min(MAX_BALL_RADIUS, current_ball_radius + 1)
+                elif event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
+                    apply_settings()
+                    game_state = STATE_AVATAR_SELECT
+                    pygame.display.set_caption("Simple Soccer Game - Select Avatar")
+
+            elif game_state == STATE_AVATAR_SELECT:
                  other_player_selection = p2_avatar_index if selecting_player == 1 else p1_avatar_index
                  num_avatars = len(AVATAR_COLORS)
                  if event.key == pygame.K_RIGHT:
@@ -523,7 +610,9 @@ while running:
     # --- Zeichnen ---
     screen.fill((0,0,0)) # Hintergrund
 
-    if game_state == STATE_AVATAR_SELECT:
+    if game_state == STATE_SETTINGS:
+        draw_settings_screen()
+    elif game_state == STATE_AVATAR_SELECT:
         draw_avatar_selection_screen()
     else:
         draw_tribunes_and_spectators()
