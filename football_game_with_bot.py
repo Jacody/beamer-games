@@ -387,6 +387,8 @@ def start_new_game():
     global score1, score2, start_time, remaining_time, last_goal_time
     score1 = 0; score2 = 0; start_time = time.time(); remaining_time = GAME_DURATION; last_goal_time = 0
     reset_positions()
+    if PLAYER2_IS_BOT:
+        bot_logic.reset_bot_state()
 
 def reset_avatar_selection():
     global selecting_player, p1_avatar_index, p2_avatar_index, current_highlighted_index
@@ -529,7 +531,8 @@ while running:
              should_sprint = bot_logic.get_bot_decision(
                  player2, ball, target_goal_x,
                  SCREEN_WIDTH, SCREEN_HEIGHT, PLAYER_RADIUS, BALL_RADIUS,
-                 TRIBUNE_HEIGHT
+                 TRIBUNE_HEIGHT,
+                 dt
              )
              if should_sprint and not player2.is_sprinting: player2.start_sprint()
              elif not should_sprint and player2.is_sprinting: player2.stop_sprint()

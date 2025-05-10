@@ -2,19 +2,33 @@
 
 import pygame
 import math
+import time
 
-# --- Bot spezifische Konstanten ---
-BOT_ANGLE_TOLERANCE_FAR = 35   # Toleranz, wenn weit weg
-BOT_ANGLE_TOLERANCE_NEAR = 20  # Toleranz, wenn nah dran (für Positionierung)
-BOT_ANGLE_TOLERANCE_SHOOTING = 10 # Sehr präzise Ausrichtung für den Schuss selbst
-BOT_KICK_DISTANCE_FACTOR = 1.2 # Leicht erhöht, um "nah" etwas früher zu erkennen
-BOT_WALL_AVOID_DISTANCE = 20   # Vorausschau für Wandvermeidung
-WALL_TOUCH_TOLERANCE = 1.0     # Toleranz für Wandberührung
+# --- Modul-globale Variablen für den Bot-Zustand ---
+_bot_current_mode = "ATTACK"  # <<<<<<< HIER ÄNDERN: Startmodus ist jetzt ATTACK
+_bot_mode_timer = 0.0
 
-# --- Hilfsfunktionen ---
+# --- Bot Konstanten ---
+# Zeitsteuerung für Moduswechsel
+BOT_DEFENSE_DURATION = 10.0  # Sekunden im Verteidigungsmodus
+BOT_ATTACK_DURATION = 10.0   # <<<<<<< HIER ÄNDERN: Sekunden im Angriffsmodus
 
+# Allgemeine Bewegung
+BOT_GOTO_ANGLE_TOLERANCE = 15
+BOT_GOTO_DISTANCE_TOLERANCE = 20
+
+# Defensivmodus
+BOT_DEFENSE_X_LINE_OFFSET = 70
+BOT_DEFENSE_MAX_Y_DEVIATION_FROM_GOAL_CENTER = 150
+
+# Angriffsmodus
+BOT_ATTACK_TARGET_DEPTH_FACTOR = 1.5
+BOT_ATTACK_KICK_ANGLE_TOLERANCE = 8
+BOT_ATTACK_MIN_DIST_TO_BALL_FOR_TARGET_BEHIND = 40
+
+# --- Hilfsfunktionen (angle_difference bleibt gleich) ---
 def angle_difference(angle1, angle2):
-    """ Berechnet die kürzeste Differenz zwischen zwei Winkeln (-180 bis 180). """
+    # ... (unverändert) ...
     a1 = angle1 % 360
     a2 = angle2 % 360
     diff = a2 - a1
@@ -22,129 +36,113 @@ def angle_difference(angle1, angle2):
     elif diff <= -180: diff += 360
     return diff
 
-def is_touching_wall(bot_pos, bot_radius, screen_width, screen_height, tribune_height):
-    """ Prüft, ob der Bot sehr nah an einer Wand ist. """
-    field_top = tribune_height
-    field_bottom = screen_height - tribune_height
-    field_left = 0
-    field_right = screen_width
-    
-    if bot_pos.x - bot_radius <= field_left + WALL_TOUCH_TOLERANCE: return True
-    if bot_pos.x + bot_radius >= field_right - WALL_TOUCH_TOLERANCE: return True
-    if bot_pos.y - bot_radius <= field_top + WALL_TOUCH_TOLERANCE: return True
-    if bot_pos.y + bot_radius >= field_bottom - WALL_TOUCH_TOLERANCE: return True
-    return False
+# --- KERNFUNKTION: go_to_position (bleibt gleich) ---
+def go_to_position(bot_player, target_pos, angle_tolerance, distance_tolerance,
+                   screen_width, screen_height, tribune_height):
+    # ... (unverändert) ...
+    bot_to_target_vec = target_pos - bot_player.pos
+    distance_to_target = bot_to_target_vec.length()
 
-def check_wall_collision_imminent(bot_pos, bot_angle, bot_radius, look_ahead_distance, screen_width, screen_height, tribune_height):
-    """ Prüft, ob ein Sprint zur Wandkollision führt. """
-    if look_ahead_distance <= 0: return False
-    rad_angle = math.radians(bot_angle)
-    try: 
-        direction = pygame.Vector2(math.cos(rad_angle), math.sin(rad_angle)).normalize()
-    except ValueError: 
-        direction = pygame.Vector2(1, 0)
-    
-    projected_pos = bot_pos + direction * look_ahead_distance
-    field_top = tribune_height
-    field_bottom = screen_height - tribune_height
-    field_left = 0
-    field_right = screen_width
-    
-    if projected_pos.x - bot_radius < field_left: return True
-    if projected_pos.x + bot_radius > field_right: return True
-    if projected_pos.y - bot_radius < field_top: return True
-    if projected_pos.y + bot_radius > field_bottom: return True
-    return False
-
-# --- HAUPTFUNKTION (Mit Schusslogik) ---
-def get_bot_decision(bot_player, ball, target_goal_center_x, screen_width, screen_height, player_radius, ball_radius, tribune_height):
-    """
-    Entscheidet, ob der Bot sprinten soll.
-    Priorisiert das Schießen, wenn in Position.
-    """
-    kick_distance_threshold = (player_radius + ball_radius) * BOT_KICK_DISTANCE_FACTOR
-
-    # --- Priorisierte Wandberührungsprüfung ---
-    touching_wall = is_touching_wall(bot_player.pos, player_radius, screen_width, screen_height, tribune_height)
-    if touching_wall:
-        return False # An Wand: Nicht sprinten
-
-    # --- Vektoren und Distanzen ---
-    bot_to_ball_vec = ball.pos - bot_player.pos
-    bot_to_ball_dist = bot_to_ball_vec.length() if bot_to_ball_vec.length() > 0 else 1
-    is_near_ball = bot_to_ball_dist < kick_distance_threshold
-
-    # --- Spielfeldmitte ---
-    field_center_y = tribune_height + (screen_height - 2 * tribune_height) / 2
-
-    # --- Ermittle, ob der Bot HINTER dem Ball ist (relativ zum Ziel) ---
-    # Annahme: Bot ist Player 2, attackiert nach links (target_goal_center_x ist klein, nahe 0)
-    is_behind_ball = False
-    if target_goal_center_x < screen_width / 2: # Angreifen nach links
-        # Bot muss rechts vom Ball sein (größere X-Koordinate)
-        is_behind_ball = bot_player.pos.x > ball.pos.x + ball_radius * 0.5
-    else: # Angreifen nach rechts
-        # Bot muss links vom Ball sein (kleinere X-Koordinate)
-        is_behind_ball = bot_player.pos.x < ball.pos.x - ball_radius * 0.5
-
-    # --- Defensive Überlegung ---
-    should_play_defensive = False
-    own_goal_center_x = screen_width - target_goal_center_x
-    if abs(ball.pos.x - own_goal_center_x) < screen_width * 0.20 and bot_to_ball_dist < kick_distance_threshold * 1.5:
-         should_play_defensive = True
-
-    # --- Zielbestimmung ---
-    target_pos = None
-
-    if should_play_defensive:
-        # Höchste Priorität: Verteidigen, wenn Ball nah am eigenen Tor
-        target_pos = pygame.Vector2(screen_width / 2, ball.pos.y) # Zur Mitte spielen
-    elif is_near_ball and is_behind_ball:
-        # Zweithöchste Priorität: Schießen, wenn nah und hinter dem Ball
-        target_pos = ball.pos # Direkt auf den Ball zielen
-    elif is_near_ball:
-        # Dritthöchste Priorität: Nah am Ball, aber nicht optimal zum Schießen
-        target_pos = pygame.Vector2(target_goal_center_x, field_center_y)
-    else:
-        # Niedrigste Priorität: Weit vom Ball -> Ball verfolgen
-        target_pos = ball.pos
-
-    # Y-Grenzen für Ziel anpassen (wenn Ziel gesetzt)
-    if target_pos:
-        target_pos.y = max(tribune_height + player_radius, min(screen_height - tribune_height - player_radius, target_pos.y))
-    else:
-        # Sollte nicht passieren, aber als Fallback
+    if distance_to_target < distance_tolerance:
         return False
 
-    # --- Winkelberechnung ---
-    bot_to_target_vec = target_pos - bot_player.pos
     if bot_to_target_vec.length_squared() < 1e-6:
-        return False # Kein klares Ziel
+        return False
 
-    try: 
+    try:
         target_angle = pygame.Vector2(1, 0).angle_to(bot_to_target_vec)
-    except ValueError: 
+    except ValueError:
         return False
 
     current_angle = bot_player.angle
-    diff = angle_difference(current_angle, target_angle)
+    angle_diff = angle_difference(current_angle, target_angle)
 
-    # --- Sprintentscheidung ---
-    shooting_mode = (is_near_ball and is_behind_ball and not should_play_defensive)
-    current_angle_tolerance = BOT_ANGLE_TOLERANCE_SHOOTING if shooting_mode else \
-                              (BOT_ANGLE_TOLERANCE_NEAR if is_near_ball else BOT_ANGLE_TOLERANCE_FAR)
-
-    # Bedingung 1: Passt der Winkel?
-    if abs(diff) < current_angle_tolerance:
-        # Bedingung 2: Droht Wandkollision?
-        if check_wall_collision_imminent(
-            bot_player.pos, bot_player.angle, player_radius,
-            BOT_WALL_AVOID_DISTANCE, screen_width, screen_height, tribune_height
-        ):
-            return False # Wand im Weg
-        else:
-            # Winkel passt, keine Wand -> SPRINT!
-            return True
+    if abs(angle_diff) < angle_tolerance:
+        return True
     else:
-        # Winkel passt nicht -> Nur drehen
         return False
+
+# --- HAUPTFUNKTION ---
+def get_bot_decision(bot_player, ball, opponent_goal_line_x,
+                     screen_width, screen_height, player_radius, ball_radius, tribune_height,
+                     dt):
+    global _bot_current_mode, _bot_mode_timer
+
+    _bot_mode_timer += dt
+    # Die Logik für den Wechsel bleibt gleich, nur die Dauer-Konstanten und der Startmodus sind anders
+    if _bot_current_mode == "DEFENSE": # Bot ist im Defense Modus
+        if _bot_mode_timer >= BOT_DEFENSE_DURATION: # Zeit für Defense abgelaufen?
+            _bot_current_mode = "ATTACK"
+            _bot_mode_timer = 0.0
+            print(f"BOT LOGIC: Wechsel zu ATTACK Modus (Zeit: {time.time():.1f})")
+    elif _bot_current_mode == "ATTACK": # Bot ist im Attack Modus
+        if _bot_mode_timer >= BOT_ATTACK_DURATION: # Zeit für Attack abgelaufen?
+            _bot_current_mode = "DEFENSE"
+            _bot_mode_timer = 0.0
+            print(f"BOT LOGIC: Wechsel zu DEFENSE Modus (Zeit: {time.time():.1f})")
+
+    target_pos = pygame.Vector2(0,0)
+    current_angle_tolerance = BOT_GOTO_ANGLE_TOLERANCE
+    current_distance_tolerance = BOT_GOTO_DISTANCE_TOLERANCE
+
+    if _bot_current_mode == "DEFENSE":
+        # ... (Defense Logik bleibt unverändert) ...
+        own_goal_line_x = screen_width - 10
+        field_height_playable = screen_height - 2 * tribune_height
+        own_goal_center_y = tribune_height + field_height_playable / 2
+        
+        defense_target_x = own_goal_line_x - BOT_DEFENSE_X_LINE_OFFSET
+        defense_target_y = ball.pos.y
+        defense_target_y = max(own_goal_center_y - BOT_DEFENSE_MAX_Y_DEVIATION_FROM_GOAL_CENTER,
+                               min(defense_target_y, own_goal_center_y + BOT_DEFENSE_MAX_Y_DEVIATION_FROM_GOAL_CENTER))
+        target_pos = pygame.Vector2(defense_target_x, defense_target_y)
+
+    elif _bot_current_mode == "ATTACK":
+        # ... (Attack Logik bleibt unverändert) ...
+        opponent_goal_center_y = tribune_height + (screen_height - 2 * tribune_height) / 2
+        opponent_goal_pos = pygame.Vector2(opponent_goal_line_x, opponent_goal_center_y)
+
+        bot_to_ball_vec = ball.pos - bot_player.pos
+        dist_bot_to_ball = bot_to_ball_vec.length()
+
+        vec_ball_to_opponent_goal = opponent_goal_pos - ball.pos
+        
+        if vec_ball_to_opponent_goal.length_squared() > 0:
+            dir_to_opponent_goal = vec_ball_to_opponent_goal.normalize()
+        else:
+            dir_to_opponent_goal = pygame.Vector2(-1, 0) if opponent_goal_line_x < screen_width / 2 else pygame.Vector2(1,0)
+
+        kick_reach = player_radius + ball_radius
+
+        if dist_bot_to_ball < kick_reach * 1.2:
+            target_pos = ball.pos + dir_to_opponent_goal * (ball_radius + player_radius * 0.5)
+            current_angle_tolerance = BOT_ATTACK_KICK_ANGLE_TOLERANCE
+            current_distance_tolerance = player_radius * 0.5
+        elif dist_bot_to_ball < BOT_ATTACK_MIN_DIST_TO_BALL_FOR_TARGET_BEHIND * 2 :
+            target_pos = ball.pos
+            current_angle_tolerance = BOT_ATTACK_KICK_ANGLE_TOLERANCE
+        else:
+            target_pos = ball.pos + dir_to_opponent_goal * (player_radius * BOT_ATTACK_TARGET_DEPTH_FACTOR + ball_radius)
+            
+    # --- Gemeinsame Logik: Ziel an Spielfeldgrenzen anpassen ---
+    # ... (bleibt unverändert) ...
+    min_y = tribune_height + player_radius
+    max_y = screen_height - tribune_height - player_radius
+    min_x = player_radius
+    max_x = screen_width - player_radius
+
+    target_pos.x = max(min_x, min(target_pos.x, max_x))
+    target_pos.y = max(min_y, min(target_pos.y, max_y))
+
+    sprint_decision = go_to_position(bot_player, target_pos,
+                                     current_angle_tolerance,
+                                     current_distance_tolerance,
+                                     screen_width, screen_height, tribune_height)
+    return sprint_decision
+
+# --- Funktion zum Zurücksetzen des Bot-Zustands ---
+def reset_bot_state():
+    global _bot_current_mode, _bot_mode_timer
+    _bot_current_mode = "ATTACK"  # <<<<<<< HIER AUCH ÄNDERN: Reset setzt jetzt in ATTACK Modus zurück
+    _bot_mode_timer = 0.0
+    print("BOT LOGIC: Interner Zustand auf ATTACK zurückgesetzt.")
